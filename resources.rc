@@ -1,0 +1,4 @@
+#include <windows.h>
+
+IDI_MAINICON ICON "wiimoteicon.ico"
+1 ICON "wiimoteicon.ico"
