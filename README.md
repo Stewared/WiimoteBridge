@@ -1,6 +1,8 @@
 ## WiimoteBridge
 
-A system tray application for pairing wii remotes to windows.
+A system tray compatibility layer that allows pairing wii remotes to windows.
+
+**This program is in alpha testing.**
 
 
 
