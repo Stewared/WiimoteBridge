@@ -123,7 +123,7 @@ HMENU SystemTray::BuildDevicesSubmenu()
 {
   HMENU submenu = CreatePopupMenu();
   
-  auto devices = WiimoteLedSetter::Instance().GetConnectedDevices();
+  auto devices = WiimoteLedSetter::Instance().GetConnectedBluetoothDevices();
   
   if (devices.empty())
   {
@@ -180,10 +180,10 @@ LRESULT CALLBACK SystemTray::WindowProc(HWND hwnd, UINT message, WPARAM wParam,
     if (menu_id >= ID_DISCONNECT_BASE && menu_id < ID_DISCONNECT_BASE + 100)
     {
       int device_index = menu_id - ID_DISCONNECT_BASE;
-      auto devices = WiimoteLedSetter::Instance().GetConnectedDevices();
-      if (device_index < devices.size())
+      auto devices = WiimoteLedSetter::Instance().GetConnectedBluetoothDevices();
+      if (device_index < static_cast<int>(devices.size()))
       {
-        WiimoteLedSetter::Instance().DisconnectDevice(devices[device_index].device_path);
+        WiimoteLedSetter::Instance().DisconnectDeviceByAddress(devices[device_index].bt_address);
         LOG_INFO("Disconnected device via menu");
       }
       return 0;
@@ -192,10 +192,11 @@ LRESULT CALLBACK SystemTray::WindowProc(HWND hwnd, UINT message, WPARAM wParam,
     if (menu_id >= ID_FORGET_BASE && menu_id < ID_FORGET_BASE + 100)
     {
       int device_index = menu_id - ID_FORGET_BASE;
-      auto devices = WiimoteLedSetter::Instance().GetConnectedDevices();
-      if (device_index < devices.size())
+      auto devices = WiimoteLedSetter::Instance().GetConnectedBluetoothDevices();
+      if (device_index < static_cast<int>(devices.size()))
       {
-        WiimoteLedSetter::Instance().ForgetDevice(devices[device_index].bt_address);
+        const auto& device = devices[device_index];
+        WiimoteLedSetter::Instance().ForgetDevice(device.bt_address);
         LOG_INFO("Forgot device via menu");
       }
       return 0;
@@ -325,7 +326,7 @@ void SystemTray::ShowContextMenu() {
 
   AppendMenuW(hmenu, MFT_SEPARATOR, 0, nullptr);
   
-  auto devices = WiimoteLedSetter::Instance().GetConnectedDevices();
+  auto devices = WiimoteLedSetter::Instance().GetConnectedBluetoothDevices();
   if (devices.empty())
   {
     AppendMenuW(hmenu, MFT_STRING | MFS_GRAYED, ID_CONNECTED_DEVICES, L"Connected Wiimotes");

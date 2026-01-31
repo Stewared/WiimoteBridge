@@ -284,6 +284,14 @@ int WiimotePairingHandler::DiscoverAndPairWiimotes(int inquiry_length, Authentic
                 continue;
             }
 
+            // Skip devices that are already fully paired (authenticated + remembered)
+            // These will auto-reconnect when user presses any button on the Wiimote
+            if (btdi.fAuthenticated && btdi.fRemembered)
+            {
+                LOG_DEBUG("  Device already paired (authenticated + remembered), will auto-connect when turned on");
+                continue;
+            }
+
             // Authenticate if needed
             if (!btdi.fAuthenticated)
             {

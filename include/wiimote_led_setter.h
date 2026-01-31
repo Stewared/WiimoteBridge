@@ -53,6 +53,7 @@ public:
         std::wstring device_path;
         std::wstring device_name;
         BLUETOOTH_ADDRESS bt_address;
+        bool has_bt_address;
     };
 
     void RegisterDevice(const std::wstring& device_path, const std::wstring& device_name = L"", const BLUETOOTH_ADDRESS* bt_addr = nullptr)
@@ -63,10 +64,13 @@ public:
             WiimoteDeviceInfo info;
             info.device_path = device_path;
             info.device_name = device_name.empty() ? L"Wii Remote" : device_name;
-            if (bt_addr)
+            if (bt_addr) {
                 info.bt_address = *bt_addr;
-            else
+                info.has_bt_address = true;
+            } else {
                 ZeroMemory(&info.bt_address, sizeof(BLUETOOTH_ADDRESS));
+                info.has_bt_address = false;
+            }
             
             m_tracked_devices[device_path] = info;
             LOG_INFO("Registered Wiimote for LED blinking");
@@ -94,47 +98,204 @@ public:
         return devices;
     }
 
+    std::vector<WiimoteDeviceInfo> GetConnectedBluetoothDevices()
+    {
+        std::vector<WiimoteDeviceInfo> devices;
+
+        constexpr BLUETOOTH_FIND_RADIO_PARAMS radio_params{ .dwSize = sizeof(radio_params) };
+        HANDLE radio_handle{};
+        auto find_radio = BluetoothFindFirstRadio(&radio_params, &radio_handle);
+        if (!find_radio)
+            return devices;
+
+        do {
+            BLUETOOTH_DEVICE_SEARCH_PARAMS search_params{
+                .dwSize = sizeof(search_params),
+                .fReturnAuthenticated = true,
+                .fReturnRemembered = true,
+                .fReturnUnknown = false,
+                .fReturnConnected = true,
+                .fIssueInquiry = false,
+                .hRadio = radio_handle,
+            };
+
+            BLUETOOTH_DEVICE_INFO btdi{ .dwSize = sizeof(btdi) };
+            auto find_device = BluetoothFindFirstDevice(&search_params, &btdi);
+            if (find_device)
+            {
+                do {
+                    std::wstring name(btdi.szName);
+                    if (btdi.fConnected &&
+                        (name.find(L"Nintendo RVL-CNT") == 0 || name.find(L"Nintendo RVL-WBC") == 0))
+                    {
+                        WiimoteDeviceInfo info;
+                        info.device_path = L"";
+                        info.device_name = name;
+                        info.bt_address = btdi.Address;
+                        info.has_bt_address = true;
+                        devices.push_back(info);
+                    }
+                } while (BluetoothFindNextDevice(find_device, &btdi));
+                BluetoothFindDeviceClose(find_device);
+            }
+            CloseHandle(radio_handle);
+        } while (BluetoothFindNextRadio(find_radio, &radio_handle));
+
+        BluetoothFindRadioClose(find_radio);
+        return devices;
+    }
+
     bool DisconnectDevice(const std::wstring& device_path)
     {
-        std::lock_guard<std::mutex> lock(m_devices_mutex);
-        auto it = m_tracked_devices.find(device_path);
-        if (it != m_tracked_devices.end())
+        WiimoteDeviceInfo device_info;
         {
-            HANDLE deviceHandle = CreateFileW(
-                device_path.c_str(),
-                GENERIC_READ | GENERIC_WRITE,
-                FILE_SHARE_READ | FILE_SHARE_WRITE,
-                nullptr, OPEN_EXISTING, 0, nullptr);
-
-            if (deviceHandle != INVALID_HANDLE_VALUE)
-            {
-                CloseHandle(deviceHandle);
-            }
-            
+            std::lock_guard<std::mutex> lock(m_devices_mutex);
+            auto it = m_tracked_devices.find(device_path);
+            if (it == m_tracked_devices.end())
+                return false;
+            device_info = it->second;
             m_tracked_devices.erase(it);
-            LOG_INFO("Disconnected Wiimote");
-            return true;
         }
-        return false;
+        
+        // Actually disconnect by disabling HID service via Bluetooth API
+        if (device_info.has_bt_address)
+        {
+            constexpr BLUETOOTH_FIND_RADIO_PARAMS radio_params{ .dwSize = sizeof(radio_params) };
+            HANDLE radio_handle{};
+            auto find_radio = BluetoothFindFirstRadio(&radio_params, &radio_handle);
+            if (find_radio)
+            {
+                do {
+                    BLUETOOTH_DEVICE_INFO btdi{ .dwSize = sizeof(btdi) };
+                    btdi.Address = device_info.bt_address;
+                    
+                    // Disable HID service to disconnect
+                    DWORD result = BluetoothSetServiceState(
+                        radio_handle, &btdi,
+                        const_cast<GUID*>(&HumanInterfaceDeviceServiceClass_UUID),
+                        BLUETOOTH_SERVICE_DISABLE);
+                    
+                    CloseHandle(radio_handle);
+                    if (result == ERROR_SUCCESS)
+                    {
+                        LOG_INFO("Disconnected Wiimote via Bluetooth API");
+                        BluetoothFindRadioClose(find_radio);
+                        return true;
+                    }
+                } while (BluetoothFindNextRadio(find_radio, &radio_handle));
+                BluetoothFindRadioClose(find_radio);
+            }
+        }
+        
+        LOG_INFO("Removed Wiimote from tracking (BT disconnect may not be complete)");
+        return true;
+    }
+
+    bool DisconnectDeviceByAddress(const BLUETOOTH_ADDRESS& bt_addr)
+    {
+        constexpr BLUETOOTH_FIND_RADIO_PARAMS radio_params{ .dwSize = sizeof(radio_params) };
+        HANDLE radio_handle{};
+        auto find_radio = BluetoothFindFirstRadio(&radio_params, &radio_handle);
+        if (!find_radio)
+            return false;
+
+        bool success = false;
+        do {
+            BLUETOOTH_DEVICE_INFO btdi{ .dwSize = sizeof(btdi) };
+            btdi.Address = bt_addr;
+
+            DWORD result = BluetoothSetServiceState(
+                radio_handle, &btdi,
+                const_cast<GUID*>(&HumanInterfaceDeviceServiceClass_UUID),
+                BLUETOOTH_SERVICE_DISABLE);
+
+            CloseHandle(radio_handle);
+            if (result == ERROR_SUCCESS)
+            {
+                success = true;
+                break;
+            }
+        } while (BluetoothFindNextRadio(find_radio, &radio_handle));
+
+        BluetoothFindRadioClose(find_radio);
+        return success;
     }
 
     bool ForgetDevice(const BLUETOOTH_ADDRESS& bt_addr)
     {
-        if (BluetoothRemoveDevice(&bt_addr) == ERROR_SUCCESS)
+        // First disconnect if connected
         {
             std::lock_guard<std::mutex> lock(m_devices_mutex);
             for (auto it = m_tracked_devices.begin(); it != m_tracked_devices.end(); ++it)
             {
-                if (memcmp(&it->second.bt_address, &bt_addr, sizeof(BLUETOOTH_ADDRESS)) == 0)
+                if (it->second.has_bt_address && 
+                    memcmp(&it->second.bt_address, &bt_addr, sizeof(BLUETOOTH_ADDRESS)) == 0)
                 {
                     m_tracked_devices.erase(it);
                     break;
                 }
             }
+        }
+        
+        // Remove from Bluetooth pairing
+        DWORD result = BluetoothRemoveDevice(&bt_addr);
+        if (result == ERROR_SUCCESS)
+        {
             LOG_INFO("Forgot Wiimote device");
             return true;
         }
-        return false;
+        else
+        {
+            LOG_ERROR("Failed to forget Wiimote device, error: " + std::to_string(result));
+            return false;
+        }
+    }
+
+    // Find Bluetooth address for a device by scanning paired devices
+    bool FindBluetoothAddressForDevice(const std::wstring& device_path, BLUETOOTH_ADDRESS* out_addr)
+    {
+        // Extract device instance ID from HID path to match against BT devices
+        constexpr BLUETOOTH_FIND_RADIO_PARAMS radio_params{ .dwSize = sizeof(radio_params) };
+        HANDLE radio_handle{};
+        auto find_radio = BluetoothFindFirstRadio(&radio_params, &radio_handle);
+        if (!find_radio)
+            return false;
+
+        bool found = false;
+        do {
+            BLUETOOTH_DEVICE_SEARCH_PARAMS search_params{
+                .dwSize = sizeof(search_params),
+                .fReturnAuthenticated = true,
+                .fReturnRemembered = true,
+                .fReturnUnknown = false,
+                .fReturnConnected = true,
+                .fIssueInquiry = false,
+                .hRadio = radio_handle,
+            };
+
+            BLUETOOTH_DEVICE_INFO btdi{ .dwSize = sizeof(btdi) };
+            auto find_device = BluetoothFindFirstDevice(&search_params, &btdi);
+            if (find_device)
+            {
+                do {
+                    std::wstring name(btdi.szName);
+                    // Check if this is a connected Wiimote
+                    if (btdi.fConnected && 
+                        (name.find(L"Nintendo RVL-CNT") == 0 || name.find(L"Nintendo RVL-WBC") == 0))
+                    {
+                        *out_addr = btdi.Address;
+                        found = true;
+                        break;
+                    }
+                } while (BluetoothFindNextDevice(find_device, &btdi));
+                BluetoothFindDeviceClose(find_device);
+            }
+            CloseHandle(radio_handle);
+            if (found) break;
+        } while (BluetoothFindNextRadio(find_radio, &radio_handle));
+        BluetoothFindRadioClose(find_radio);
+        
+        return found;
     }
 
 private:
@@ -147,6 +308,100 @@ private:
     std::map<std::wstring, WiimoteDeviceInfo> m_tracked_devices;
     std::mutex m_devices_mutex;
     int m_current_led_pattern;
+
+    // Get actual Bluetooth device name for a Wiimote
+    std::wstring GetBluetoothDeviceName(const std::wstring& device_path, USHORT productId)
+    {
+        // Default fallback names
+        std::wstring defaultName = (productId == 0x0330) ? L"Wii Remote Plus" : L"Wii Remote";
+        
+        // Scan connected Bluetooth devices to find matching Wiimote name
+        constexpr BLUETOOTH_FIND_RADIO_PARAMS radio_params{ .dwSize = sizeof(radio_params) };
+        HANDLE radio_handle{};
+        auto find_radio = BluetoothFindFirstRadio(&radio_params, &radio_handle);
+        if (!find_radio)
+            return defaultName;
+
+        std::wstring foundName;
+        do {
+            BLUETOOTH_DEVICE_SEARCH_PARAMS search_params{
+                .dwSize = sizeof(search_params),
+                .fReturnAuthenticated = true,
+                .fReturnRemembered = true,
+                .fReturnUnknown = false,
+                .fReturnConnected = true,
+                .fIssueInquiry = false,
+                .hRadio = radio_handle,
+            };
+
+            BLUETOOTH_DEVICE_INFO btdi{ .dwSize = sizeof(btdi) };
+            auto find_device = BluetoothFindFirstDevice(&search_params, &btdi);
+            if (find_device)
+            {
+                do {
+                    std::wstring name(btdi.szName);
+                    // Check if this is a connected Wiimote - return actual BT name
+                    if (btdi.fConnected && 
+                        (name.find(L"Nintendo RVL-CNT") == 0 || name.find(L"Nintendo RVL-WBC") == 0))
+                    {
+                        foundName = name;
+                        break;
+                    }
+                } while (BluetoothFindNextDevice(find_device, &btdi));
+                BluetoothFindDeviceClose(find_device);
+            }
+            CloseHandle(radio_handle);
+            if (!foundName.empty()) break;
+        } while (BluetoothFindNextRadio(find_radio, &radio_handle));
+        BluetoothFindRadioClose(find_radio);
+        
+        return foundName.empty() ? defaultName : foundName;
+    }
+
+    // Find Bluetooth address by device name
+    bool FindBluetoothAddressForDeviceByName(const std::wstring& device_name, BLUETOOTH_ADDRESS* out_addr)
+    {
+        constexpr BLUETOOTH_FIND_RADIO_PARAMS radio_params{ .dwSize = sizeof(radio_params) };
+        HANDLE radio_handle{};
+        auto find_radio = BluetoothFindFirstRadio(&radio_params, &radio_handle);
+        if (!find_radio)
+            return false;
+
+        bool found = false;
+        do {
+            BLUETOOTH_DEVICE_SEARCH_PARAMS search_params{
+                .dwSize = sizeof(search_params),
+                .fReturnAuthenticated = true,
+                .fReturnRemembered = true,
+                .fReturnUnknown = false,
+                .fReturnConnected = true,
+                .fIssueInquiry = false,
+                .hRadio = radio_handle,
+            };
+
+            BLUETOOTH_DEVICE_INFO btdi{ .dwSize = sizeof(btdi) };
+            auto find_device = BluetoothFindFirstDevice(&search_params, &btdi);
+            if (find_device)
+            {
+                do {
+                    std::wstring name(btdi.szName);
+                    // Match by name
+                    if (name == device_name)
+                    {
+                        *out_addr = btdi.Address;
+                        found = true;
+                        break;
+                    }
+                } while (BluetoothFindNextDevice(find_device, &btdi));
+                BluetoothFindDeviceClose(find_device);
+            }
+            CloseHandle(radio_handle);
+            if (found) break;
+        } while (BluetoothFindNextRadio(find_radio, &radio_handle));
+        BluetoothFindRadioClose(find_radio);
+        
+        return found;
+    }
 
     void BlinkThreadProc()
     {
@@ -310,8 +565,24 @@ private:
                         {
                             WiimoteDeviceInfo info;
                             info.device_path = devicePath;
-                            info.device_name = (attributes.ProductID == 0x0330) ? L"Wii Remote Plus" : L"Wii Remote";
-                            ZeroMemory(&info.bt_address, sizeof(BLUETOOTH_ADDRESS));
+                            
+                            // Try to get actual Bluetooth device name
+                            std::wstring bt_name = GetBluetoothDeviceName(devicePath, attributes.ProductID);
+                            info.device_name = bt_name;
+                            
+                            // Try to find and store the BT address
+                            BLUETOOTH_ADDRESS addr;
+                            if (FindBluetoothAddressForDeviceByName(bt_name, &addr))
+                            {
+                                info.bt_address = addr;
+                                info.has_bt_address = true;
+                            }
+                            else
+                            {
+                                ZeroMemory(&info.bt_address, sizeof(BLUETOOTH_ADDRESS));
+                                info.has_bt_address = false;
+                            }
+                            
                             m_tracked_devices[devicePath] = info;
                             LOG_NOTICE("Detected pre-paired Wiimote, starting LED animation");
                             count++;
