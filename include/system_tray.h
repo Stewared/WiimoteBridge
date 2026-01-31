@@ -15,7 +15,6 @@ enum class PairingMode
 
 class WiimoteManager;
 
-// Custom window messages for inter-thread communication
 const UINT WM_WIIMOTE_CONNECTED = WM_APP + 100;
 const UINT WM_WIIMOTE_PAIRING_STATUS = WM_APP + 101;
 
@@ -30,21 +29,18 @@ public:
     void SetStatusMessage(const std::string& message);
     void SetWiimoteManager(WiimoteManager* manager);
     
-    // Get current countdown for external access
     int GetCountdownSeconds() const { return m_countdown_seconds; }
     PairingMode GetCurrentMode() const { return m_current_mode; }
     
-    // Toast notifications
     void ShowToast(const std::wstring& title, const std::wstring& message, bool isSuccess = true);
     
-    // Get window handle for posting messages from other threads
     HWND GetHwnd() const { return m_hwnd; }
     
-    // Get global instance
     static SystemTray* GetInstance() { return s_instance; }
 
-    // Window message processing
     static LRESULT CALLBACK WindowProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam);
+
+    void StartPairing60Seconds();
 
 private:
     HWND m_hwnd;
@@ -60,4 +56,5 @@ private:
 
     void UpdateTrayIcon();
     void RegisterWindowClass();
+    HMENU BuildDevicesSubmenu();
 };

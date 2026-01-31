@@ -311,19 +311,13 @@ int WiimotePairingHandler::DiscoverAndPairWiimotes(int inquiry_length, Authentic
                 ++success_count;
                 LOG_NOTICE(LogFormat("Successfully paired and connected: %s", WideToNarrow(device_name).c_str()));
                 
-                // Give Windows a moment to set up the HID device
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 
-                // Set LEDs on the Wiimote to stop the blinking
-                // Use LED pattern based on how many we've paired (1=P1, 2=P2, etc.)
-                int ledMask = 1 << ((success_count - 1) % 4);
-                WiimoteLedSetter::SetLedsOnAllWiimotes(ledMask);
+                WiimoteLedSetter::Instance().SetLedsOnAllWiimotes();
                 
-                // Notify the UI that a Wiimote was connected
                 SystemTray* tray = SystemTray::GetInstance();
                 if (tray && tray->GetHwnd())
                 {
-                    // Allocate a copy of the device name to send to the UI thread
                     wchar_t* nameCopy = new wchar_t[device_name.length() + 1];
                     wcscpy_s(nameCopy, device_name.length() + 1, device_name.c_str());
                     PostMessage(tray->GetHwnd(), WM_WIIMOTE_CONNECTED, 
@@ -473,4 +467,3 @@ int WiimotePairingHandler::RemoveUnusableWiimoteDevices()
 }
 
 #pragma warning(pop)
-

@@ -25,11 +25,11 @@ public:
 
         m_wiimote_mgr = std::make_unique<WiimoteManager>();
         
-        // Connect the manager to the tray for callbacks
         m_tray->SetWiimoteManager(m_wiimote_mgr.get());
 
-        // Register for auto-start
         RegistryUtils::SetAutoStartEnabled(true);
+
+        m_tray->StartPairing60Seconds();
 
         m_running = true;
         LOG_INFO("WiimoteBridge initialized successfully");
@@ -40,16 +40,14 @@ public:
     {
         MSG msg = {};
 
-        while (m_running && GetMessage(&msg, nullptr, 0, 0) > 0)
+        while (GetMessage(&msg, nullptr, 0, 0) > 0)
         {
-            // Tick the wiimote manager (handles 1-minute timeouts)
             m_wiimote_mgr->Tick();
 
             TranslateMessage(&msg);
             DispatchMessage(&msg);
 
-            // Small sleep to prevent CPU spinning
-            Sleep(100);
+            Sleep(10);
         }
         
         LOG_INFO("WiimoteBridge application exiting");

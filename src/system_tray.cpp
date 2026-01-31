@@ -2,6 +2,7 @@
 #include "debug_log.h"
 #include "toast_notification.h"
 #include "wiimote_manager.h"
+#include "wiimote_led_setter.h"
 #include <sstream>
 
 #pragma comment(lib, "shell32.lib")
@@ -17,7 +18,11 @@ enum MenuItems {
   ID_OPEN_PAIRING = 2,
   ID_OPEN_PAIRING_1MIN = 3,
   ID_CLOSE_PAIRING = 4,
-  ID_EXIT = 5
+  ID_CONNECTED_DEVICES = 5,
+  ID_EXIT = 6,
+  ID_DEVICE_BASE = 1000,
+  ID_DISCONNECT_BASE = 2000,
+  ID_FORGET_BASE = 3000
 };
 
 static WiimoteManager *g_wiimote_manager = nullptr;
@@ -47,7 +52,6 @@ bool SystemTray::Initialize(HINSTANCE hInstance) {
   m_hInstance = hInstance;
   RegisterWindowClass();
 
-  // Create hidden window
   m_hwnd = CreateWindowExW(0, L"WiimoteBridgeClass",
                            L"Wii Remote Pairing Bridge", WS_OVERLAPPEDWINDOW,
                            CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
@@ -56,13 +60,10 @@ bool SystemTray::Initialize(HINSTANCE hInstance) {
   if (!m_hwnd)
     return false;
 
-  // Hide window
   ShowWindow(m_hwnd, SW_HIDE);
 
-  // Store the pointer to this object in the window user data
   SetWindowLongPtr(m_hwnd, GWLP_USERDATA, (LONG_PTR)this);
 
-  // Add tray icon
   ZeroMemory(&m_nid, sizeof(m_nid));
   m_nid.cbSize = sizeof(NOTIFYICONDATAW);
   m_nid.hWnd = m_hwnd;
@@ -70,7 +71,6 @@ bool SystemTray::Initialize(HINSTANCE hInstance) {
   m_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
   m_nid.uCallbackMessage = WM_TRAYICON;
 
-  // Try to load embedded icon first, then from file, then fall back to default
   HICON custom_icon = LoadIcon(hInstance, MAKEINTRESOURCE(1));
 
   if (!custom_icon) {
@@ -88,7 +88,6 @@ bool SystemTray::Initialize(HINSTANCE hInstance) {
   if (!Shell_NotifyIconW(NIM_ADD, &m_nid))
     return false;
 
-  // Enable tooltip
   m_nid.uVersion = NOTIFYICON_VERSION_4;
   Shell_NotifyIconW(NIM_SETVERSION, &m_nid);
 
@@ -105,6 +104,44 @@ void SystemTray::RegisterWindowClass() {
   wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
 
   RegisterClassW(&wc);
+}
+
+void SystemTray::StartPairing60Seconds()
+{
+  LOG_INFO("Auto-starting 60-second pairing mode");
+  m_current_mode = PairingMode::PairingOneMinute;
+  m_countdown_seconds = 60;
+  m_status_message = "Pairing enabled for 60 seconds";
+  UpdateTrayIcon();
+  SetTimer(m_hwnd, TIMER_ID, 1000, nullptr);
+  if (g_wiimote_manager) {
+    g_wiimote_manager->StartPairingForOneMinute();
+  }
+}
+
+HMENU SystemTray::BuildDevicesSubmenu()
+{
+  HMENU submenu = CreatePopupMenu();
+  
+  auto devices = WiimoteLedSetter::Instance().GetConnectedDevices();
+  
+  if (devices.empty())
+  {
+    AppendMenuW(submenu, MFT_STRING | MFS_GRAYED, 0, L"No devices connected");
+    return submenu;
+  }
+
+  for (size_t i = 0; i < devices.size(); ++i)
+  {
+    HMENU deviceMenu = CreatePopupMenu();
+    
+    AppendMenuW(deviceMenu, MFT_STRING, ID_DISCONNECT_BASE + i, L"Disconnect");
+    AppendMenuW(deviceMenu, MFT_STRING, ID_FORGET_BASE + i, L"Forget");
+    
+    AppendMenuW(submenu, MF_POPUP, (UINT_PTR)deviceMenu, devices[i].device_name.c_str());
+  }
+
+  return submenu;
 }
 
 LRESULT CALLBACK SystemTray::WindowProc(HWND hwnd, UINT message, WPARAM wParam,
@@ -125,7 +162,6 @@ LRESULT CALLBACK SystemTray::WindowProc(HWND hwnd, UINT message, WPARAM wParam,
 
   switch (message) {
   case WM_CREATE:
-    // During window creation
     return 0;
 
   case WM_TRAYICON: {
@@ -140,6 +176,31 @@ LRESULT CALLBACK SystemTray::WindowProc(HWND hwnd, UINT message, WPARAM wParam,
 
   case WM_COMMAND: {
     int menu_id = LOWORD(wParam);
+    
+    if (menu_id >= ID_DISCONNECT_BASE && menu_id < ID_DISCONNECT_BASE + 100)
+    {
+      int device_index = menu_id - ID_DISCONNECT_BASE;
+      auto devices = WiimoteLedSetter::Instance().GetConnectedDevices();
+      if (device_index < devices.size())
+      {
+        WiimoteLedSetter::Instance().DisconnectDevice(devices[device_index].device_path);
+        LOG_INFO("Disconnected device via menu");
+      }
+      return 0;
+    }
+    
+    if (menu_id >= ID_FORGET_BASE && menu_id < ID_FORGET_BASE + 100)
+    {
+      int device_index = menu_id - ID_FORGET_BASE;
+      auto devices = WiimoteLedSetter::Instance().GetConnectedDevices();
+      if (device_index < devices.size())
+      {
+        WiimoteLedSetter::Instance().ForgetDevice(devices[device_index].bt_address);
+        LOG_INFO("Forgot device via menu");
+      }
+      return 0;
+    }
+    
     switch (menu_id) {
     case ID_OPEN_PAIRING:
       LOG_INFO("Menu: Open Pairing selected");
@@ -184,6 +245,8 @@ LRESULT CALLBACK SystemTray::WindowProc(HWND hwnd, UINT message, WPARAM wParam,
       if (g_wiimote_manager) {
         g_wiimote_manager->StopPairing();
       }
+      Shell_NotifyIconW(NIM_DELETE, &pThis->m_nid);
+      DestroyWindow(hwnd);
       PostQuitMessage(0);
       break;
     }
@@ -242,7 +305,6 @@ void SystemTray::ShowContextMenu() {
 
   HMENU hmenu = CreatePopupMenu();
 
-  // Build status text
   std::wstring status_text = L"  ";
   switch (m_current_mode) {
   case PairingMode::Closed:
@@ -261,6 +323,19 @@ void SystemTray::ShowContextMenu() {
   AppendMenuW(hmenu, MFT_STRING, ID_STATUS, status_text.c_str());
   EnableMenuItem(hmenu, ID_STATUS, MF_BYCOMMAND | MF_GRAYED);
 
+  AppendMenuW(hmenu, MFT_SEPARATOR, 0, nullptr);
+  
+  auto devices = WiimoteLedSetter::Instance().GetConnectedDevices();
+  if (devices.empty())
+  {
+    AppendMenuW(hmenu, MFT_STRING | MFS_GRAYED, ID_CONNECTED_DEVICES, L"Connected Wiimotes");
+  }
+  else
+  {
+    HMENU devicesSubmenu = BuildDevicesSubmenu();
+    AppendMenuW(hmenu, MF_POPUP, (UINT_PTR)devicesSubmenu, L"Connected Wiimotes");
+  }
+  
   AppendMenuW(hmenu, MFT_SEPARATOR, 0, nullptr);
   AppendMenuW(hmenu, MFT_STRING, ID_OPEN_PAIRING, L"Open Pairing");
   AppendMenuW(hmenu, MFT_STRING, ID_OPEN_PAIRING_1MIN,
@@ -303,7 +378,6 @@ void SystemTray::SetStatusMessage(const std::string &message) {
 
 void SystemTray::ShowToast(const std::wstring &title,
                            const std::wstring &message, bool isSuccess) {
-  // Convert wide strings to narrow for logging
   std::string titleNarrow, messageNarrow;
   int titleSize = WideCharToMultiByte(CP_UTF8, 0, title.c_str(), -1, nullptr, 0,
                                       nullptr, nullptr);

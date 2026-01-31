@@ -1,4 +1,5 @@
 #include "wiimote_manager.h"
+#include "wiimote_led_setter.h"
 #include "debug_log.h"
 
 WiimoteManager::WiimoteManager()
@@ -6,6 +7,12 @@ WiimoteManager::WiimoteManager()
 {
     m_pairing_handler = std::make_unique<WiimotePairingHandler>();
     m_pairing_handler->Initialize();
+    m_last_detection_check = std::chrono::steady_clock::now();
+    
+    WiimoteLedSetter::Instance().StartBlinking();
+    
+    CheckForPrePairedDevices();
+    
     LOG_INFO("WiimoteManager created");
 }
 
@@ -15,6 +22,7 @@ WiimoteManager::~WiimoteManager()
     {
         EndPairing();
     }
+    WiimoteLedSetter::Instance().StopBlinking();
     LOG_INFO("WiimoteManager destroyed");
 }
 
@@ -67,10 +75,7 @@ bool WiimoteManager::GetStatus(std::string& status_out)
 
 void WiimoteManager::Tick()
 {
-    if (!m_is_pairing)
-        return;
-
-    if (m_one_minute_mode)
+    if (m_is_pairing && m_one_minute_mode)
     {
         auto elapsed = std::chrono::steady_clock::now() - m_pairing_start_time;
         if (elapsed >= std::chrono::minutes(1))
@@ -78,6 +83,13 @@ void WiimoteManager::Tick()
             LOG_INFO("One-minute pairing timeout reached");
             EndPairing();
         }
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    if (now - m_last_detection_check >= std::chrono::seconds(5))
+    {
+        CheckForPrePairedDevices();
+        m_last_detection_check = now;
     }
 }
 
@@ -87,4 +99,13 @@ bool WiimoteManager::EndPairing()
     m_is_pairing = false;
     m_one_minute_mode = false;
     return m_pairing_handler->StopPairing();
+}
+
+void WiimoteManager::CheckForPrePairedDevices()
+{
+    int detected = WiimoteLedSetter::Instance().DetectAndRegisterNewWiimotes();
+    if (detected > 0)
+    {
+        LOG_NOTICE(LogFormat("Detected %d pre-paired Wiimote(s), LED animation started", detected));
+    }
 }
