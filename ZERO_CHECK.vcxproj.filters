@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\kestr\Coding\WiimoteBridge\CMakeFiles\ed959bdf3451df883327adc79bc8800f\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{94525441-98ED-3213-A4DC-FD88D0B2C6EA}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

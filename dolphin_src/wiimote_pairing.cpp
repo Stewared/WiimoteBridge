@@ -284,12 +284,11 @@ int WiimotePairingHandler::DiscoverAndPairWiimotes(int inquiry_length, Authentic
                 continue;
             }
 
-            // Skip devices that are already fully paired (authenticated + remembered)
-            // These will auto-reconnect when user presses any button on the Wiimote
+            // Already-paired devices can still need an explicit HID service enable
+            // to reconnect reliably on Windows.
             if (btdi.fAuthenticated && btdi.fRemembered)
             {
-                LOG_DEBUG("  Device already paired (authenticated + remembered), will auto-connect when turned on");
-                continue;
+                LOG_DEBUG("  Device already paired (authenticated + remembered), attempting HID reconnect");
             }
 
             // Authenticate if needed
@@ -336,6 +335,24 @@ int WiimotePairingHandler::DiscoverAndPairWiimotes(int inquiry_length, Authentic
             {
                 // FYI: Tends to fail with ERROR_INVALID_PARAMETER
                 LOG_ERROR(LogFormat("BluetoothSetServiceState failed with error %lu", service_result));
+
+                // Some remembered/authenticated entries are stale on Windows and cannot
+                // be reconnected via service enable. Remove them so the next scan can
+                // perform a clean authentication flow.
+                if (service_result == ERROR_INVALID_PARAMETER && btdi.fRemembered &&
+                    btdi.fAuthenticated && !btdi.fConnected)
+                {
+                    LOG_NOTICE("  Stale remembered device detected, removing for clean re-pair");
+                    const DWORD remove_result = BluetoothRemoveDevice(&btdi.Address);
+                    if (remove_result == ERROR_SUCCESS)
+                    {
+                        LOG_NOTICE("  Removed stale remembered device");
+                    }
+                    else
+                    {
+                        LOG_ERROR(LogFormat("  Failed to remove stale remembered device: %lu", remove_result));
+                    }
+                }
             }
 
         } while (BluetoothFindNextDevice(find_device, &btdi) && !m_should_stop);

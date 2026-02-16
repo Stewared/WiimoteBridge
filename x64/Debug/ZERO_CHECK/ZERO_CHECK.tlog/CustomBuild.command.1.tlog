@@ -1,0 +1,10 @@
+^C:\USERS\KESTR\CODING\WIIMOTEBRIDGE\CMAKEFILES\ED959BDF3451DF883327ADC79BC8800F\GENERATE.STAMP.RULE
+setlocal
+"C:\Program Files\CMake\bin\cmake.exe" -SC:/Users/kestr/Coding/WiimoteBridge -BC:/Users/kestr/Coding/WiimoteBridge --check-stamp-list CMakeFiles/generate.stamp.list --vs-solution-file C:/Users/kestr/Coding/WiimoteBridge/WiimoteBridge.sln
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

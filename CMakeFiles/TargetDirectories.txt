@@ -1,0 +1,3 @@
+C:/Users/kestr/Coding/WiimoteBridge/CMakeFiles/WiimoteBridge.dir
+C:/Users/kestr/Coding/WiimoteBridge/CMakeFiles/ALL_BUILD.dir
+C:/Users/kestr/Coding/WiimoteBridge/CMakeFiles/ZERO_CHECK.dir
